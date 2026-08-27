@@ -1,0 +1,59 @@
+# QueryAgent role-based access config
+# Loaded by the MCP server at startup.
+# Set QUERYAGENT_ROLES_CONFIG=path/to/this/file when starting the server.
+
+roles:
+  # analyst: can query business tables, no salary/contact data
+  analyst:
+    allowed_tables:
+      - customers
+      - orders
+      - order_items
+      - products
+      - reviews
+    blocked_columns:
+      customers:
+        - phone
+        - email
+
+  # finance: financial tables only, no HR data
+  finance:
+    allowed_tables:
+      - accounts
+      - transactions
+      - loans
+      - credit_cards
+    blocked_columns: {}
+
+  # hr: HR tables, salary figures are visible
+  hr:
+    allowed_tables:
+      - employees
+      - departments
+      - salaries
+      - attendance
+    blocked_columns: {}
+
+  # logistics: supply chain tables only
+  logistics:
+    allowed_tables:
+      - shipments
+      - warehouses
+      - carriers
+      - delivery_routes
+    blocked_columns: {}
+
+  # admin: sees everything, no blocked columns
+  admin:
+    blocked_columns: {}
+
+  # readonly: safe default — all tables visible, sensitive columns blocked
+  readonly:
+    blocked_columns:
+      customers:
+        - phone
+        - email
+      employees:
+        - national_id
+
+default_role: readonly

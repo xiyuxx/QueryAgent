@@ -1,0 +1,23 @@
+{"id": "w01", "question": "价格最贵的商品叫什么？", "gold_sql": "SELECT name FROM products ORDER BY price DESC LIMIT 1"}
+{"id": "w02", "question": "每个客户的下单数量是多少？", "gold_sql": "SELECT customer_id, COUNT(*) FROM orders GROUP BY customer_id ORDER BY customer_id"}
+{"id": "w03", "question": "评分低于4分的商品有哪些？", "gold_sql": "SELECT DISTINCT p.name FROM reviews r JOIN products p ON r.product_id = p.product_id WHERE r.rating < 4"}
+{"id": "w04", "question": "订单总金额最高的是哪一单？", "gold_sql": "SELECT order_id FROM orders ORDER BY total_amount DESC LIMIT 1"}
+{"id": "w05", "question": "所有账户的余额总和是多少？", "gold_sql": "SELECT SUM(balance) FROM accounts"}
+{"id": "w06", "question": "6月份一共有多少笔交易？", "gold_sql": "SELECT COUNT(*) FROM transactions WHERE txn_date LIKE '2024-06%'"}
+{"id": "w07", "question": "还有多少贷款未还清？", "gold_sql": "SELECT COUNT(*) FROM loans WHERE status = '未还清'"}
+{"id": "w08", "question": "信用卡欠款余额最高的是哪张卡？", "gold_sql": "SELECT card_id FROM credit_cards ORDER BY outstanding_balance DESC LIMIT 1"}
+{"id": "w09", "question": "平均薪资最高的部门是哪个？", "gold_sql": "SELECT d.name FROM departments d JOIN employees e ON e.department_id = d.department_id JOIN salaries s ON s.employee_id = e.employee_id GROUP BY d.name ORDER BY AVG(s.base_salary) DESC LIMIT 1"}
+{"id": "w10", "question": "迟到次数最多的员工是谁？", "gold_sql": "SELECT e.name FROM employees e JOIN attendance a ON a.employee_id = e.employee_id WHERE a.status = '迟到' GROUP BY e.name ORDER BY COUNT(*) DESC LIMIT 1"}
+{"id": "w11", "question": "每个部门的员工数量分别是多少？", "gold_sql": "SELECT d.name, COUNT(e.employee_id) FROM departments d LEFT JOIN employees e ON e.department_id = d.department_id GROUP BY d.name ORDER BY d.name"}
+{"id": "w12", "question": "基本工资超过2万的员工有哪些？", "gold_sql": "SELECT e.name FROM employees e JOIN salaries s ON s.employee_id = e.employee_id WHERE s.base_salary > 20000"}
+{"id": "w13", "question": "库存量最多的仓库是哪个？", "gold_sql": "SELECT name FROM warehouses ORDER BY stock_quantity DESC LIMIT 1"}
+{"id": "w14", "question": "已经送达的运输单有多少？", "gold_sql": "SELECT COUNT(*) FROM shipments WHERE status = '已送达'"}
+{"id": "w15", "question": "最长的配送路线是哪条？", "gold_sql": "SELECT route_id FROM delivery_routes ORDER BY distance_km DESC LIMIT 1"}
+{"id": "w16", "question": "待发货的运输单总重量是多少？", "gold_sql": "SELECT SUM(weight) FROM shipments WHERE status = '待发货'"}
+{"id": "w17", "question": "北京的客户一共下了多少订单？", "gold_sql": "SELECT COUNT(*) FROM orders o JOIN customers c ON o.customer_id = c.customer_id WHERE c.city = '北京'"}
+{"id": "w18", "question": "价格在100到1000元之间的商品有哪些？", "gold_sql": "SELECT name FROM products WHERE price BETWEEN 100 AND 1000"}
+{"id": "w19", "question": "北京和上海的客户有哪些？", "gold_sql": "SELECT name FROM customers WHERE city IN ('北京', '上海')"}
+{"id": "w20", "question": "按价格从低到高列出所有商品名称", "gold_sql": "SELECT name FROM products ORDER BY price ASC"}
+{"id": "w21", "question": "2023年注册的北京客户有哪些？", "gold_sql": "SELECT name FROM customers WHERE city = '北京' AND register_date LIKE '2023%'"}
+{"id": "w22", "question": "每个品类的商品数量是多少？", "gold_sql": "SELECT category, COUNT(*) FROM products GROUP BY category"}
+{"id": "w23", "question": "下单总金额超过5000元的客户有哪些？", "gold_sql": "SELECT c.name FROM orders o JOIN customers c ON o.customer_id = c.customer_id GROUP BY c.name HAVING SUM(o.total_amount) > 5000"}
