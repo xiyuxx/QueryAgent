@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-queryagent_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-queryagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - queryagent_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      QUERYAGENT_DB_DSN: postgresql://${POSTGRES_USER:-queryagent}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+    ports:
+      - "${QUERYAGENT_BACKEND_PORT:-8000}:8000"
+    volumes:
+      - queryagent_embedding_cache:/root/.cache/fastembed
+      - queryagent_runtime:/var/lib/queryagent
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${QUERYAGENT_FRONTEND_PORT:-5173}:80"
+
+volumes:
+  queryagent_pgdata:
+  queryagent_embedding_cache:
+  queryagent_runtime:

@@ -1,7 +1,7 @@
 # QueryAgent — 整体设计框架
 
 > Text-to-SQL 数据分析 Agent：自建评测体系 + 可靠性链路。
-> 本文是详细设计，供实现时逐条对齐。配套 `AGENTS.md` 约定工作规则。
+> 本文是 Agent 核心设计，供实现时逐条对齐。Web Demo、PostgreSQL 迁移和阶段验收见 `docs/WEB_DEMO_DESIGN.md`；配套 `AGENTS.md` 约定工作规则。
 
 ---
 
@@ -30,7 +30,7 @@
 - 不训练/微调模型（除非后续明确需要）
 - 不做完整的多 agent 编排（本项目单 agent）
 - 不做生产级高并发服务（评测调度层可选 Go 是加分项，非必需）
-- 不做前端 UI
+- 不做公网部署、账号系统和手机端适配；提供面向桌面浏览器的本地 React/Vite 展示界面
 
 ## 3. 系统架构
 
@@ -155,11 +155,11 @@ flowchart LR
 | 语言 | Python 3.11+ | 可选 Go 写评测调度层 |
 | 模型 | 闭源 API + Qwen 开源对照 | Qwen 用 vLLM 或官方 API |
 | 结构化输出 | JSON Schema + Pydantic v2 | |
-| 数据库 | SQLite（开发）/ PostgreSQL | |
-| 沙箱 | Docker + 只读连接 | |
-| MCP | 官方 MCP SDK（Python） | |
+| 数据库 | PostgreSQL + pgvector | 正式 Demo 唯一数据源；不保留 SQLite 运行路径 | |
+| 执行隔离 | PostgreSQL 只读角色 + statement_timeout + 行数上限 | MCP 服务端是唯一执行边界 | |
+| MCP | 官方 MCP SDK（Python） | PostgreSQL Server 作为独立 stdio 子进程 | |
 | Tracing | Langfuse / OpenTelemetry | 可自建轻量版 |
-| 依赖管理 | uv 或 pip + pyproject.toml | |
+| 依赖管理 | uv 或 pip + pyproject.toml；Docker Compose 一键启动 | |
 
 ## 9. 里程碑（4~6 周）
 
@@ -179,7 +179,15 @@ flowchart LR
 3. Qwen 与闭源模型有对照评测结果。
 4. 产出一段可写进简历的量化描述（成功率/成本/延迟数字齐全）。
 
-## 11. 风险与取舍
+## 11. Web Demo 与 PostgreSQL 迁移补充
+
+正式展示版本统一采用 PostgreSQL + pgvector。用户通过 Docker Compose 启动 PostgreSQL、FastAPI 后端和 Nginx/React 前端，唯一访问地址为 `http://localhost:5173`。Agent 通过 `MCPExecutor` 与独立 PostgreSQL MCP Server 子进程通信，不直接访问 DSN。
+
+聊天、数据浏览、搜索和 CSV 导出全部经过 MCP；数据库初始化和固定数据重置是唯一允许后端直连 PostgreSQL 的维护操作。数据浏览、角色切换、多会话、SSE、Provider 故障转移、实时评测和启动状态页的详细约束见 `docs/WEB_DEMO_DESIGN.md`。
+
+SQLite 代码和数据只作为迁移阶段的历史基线，Phase 1 完成后从正式运行路径删除；迁移期间不得把 SQLite 新能力作为产品功能继续扩展。
+
+## 12. 风险与取舍
 
 | 风险 | 取舍/缓解 |
 |---|---|

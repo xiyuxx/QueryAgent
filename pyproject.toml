@@ -17,7 +17,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-postgres = ["psycopg[binary]>=3.2", "fastembed>=0.3", "numpy>=1.26"]
+postgres = ["psycopg[binary]>=3.2", "fastembed>=0.3", "numpy>=1.26", "PyYAML>=6.0"]
+web = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
