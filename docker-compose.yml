@@ -16,6 +16,24 @@ services:
       timeout: 5s
       retries: 20
 
+  db-init:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      QUERYAGENT_DB_DSN: postgresql://${POSTGRES_USER:-queryagent}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "scripts/init_demo_db.py"]
+    volumes:
+      - queryagent_embedding_cache:/root/.cache/fastembed
+      - queryagent_runtime:/var/lib/queryagent
+
   backend:
     build:
       context: .
@@ -27,8 +45,8 @@ services:
       POSTGRES_HOST: postgres
       QUERYAGENT_DB_DSN: postgresql://${POSTGRES_USER:-queryagent}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     expose:
       - "8000"
     ports:

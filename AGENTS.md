@@ -76,8 +76,8 @@ QueryAgent/
 - [x] 原有 Text-to-SQL Agent、评测 harness、SQLite/MCP 原型和 RBAC 测试已存在
 - [x] Git 仓库已初始化，`main` 与 GitHub 远端同步
 - [x] 本地 Web Demo 产品需求已确认，见 `docs/WEB_DEMO_DESIGN.md`
-- [ ] Phase 0：工程骨架与 Compose 基线
-- [ ] Phase 1：PostgreSQL + pgvector 模拟生产数据库
+- [x] Phase 0：工程骨架与 Compose 基线
+- [x] Phase 1：PostgreSQL + pgvector 模拟生产数据库（确定性生成器与初始化器；真实 Compose 集成待 Docker 环境）
 - [ ] Phase 2：PostgreSQL MCP 与数据浏览工具
 - [ ] Phase 3：Agent/Provider/FastAPI/SSE
 - [ ] Phase 4：React 查询工作台
