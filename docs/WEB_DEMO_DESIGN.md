@@ -179,7 +179,9 @@ MCP 使用 PostgreSQL 只读数据库角色、`statement_timeout`、行数上限
 ### Phase 1：PostgreSQL、pgvector 和固定种子数据
 
 - 初始化业务表、默认数据和技术索引；
-- 验证幂等、重置一致性、扩展和 embedding 缓存。
+- 验证幂等、重置一致性、扩展和 embedding 缓存；
+- 当前生成器固定为 17 张业务表、约 3.3 万行合成数据；
+- 真实 PostgreSQL/pgvector 集成测试需要 Docker 或本机 PostgreSQL 环境，当前源代码环境完成了静态和单元验证。
 
 ### Phase 2：PostgreSQL MCP 与 RBAC
 
