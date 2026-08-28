@@ -26,28 +26,33 @@
 | Agent 抽象 | **自研，禁用 LangChain/LlamaIndex 封装 loop** | 核心逻辑自己写，这是"懂底层"的证据 |
 | 工具协议 | **MCP**（把数据库查询封装成 MCP tool） | 面试考点，不能硬编码函数 |
 | Structured Output | JSON Schema + Pydantic | 卡死字段，下游可解析 |
-| 数据库 | SQLite（开发）/ PostgreSQL（可选） | 沙箱隔离执行 |
-| 沙箱 | Docker 容器执行 SQL | 工具调用安全考点 |
-| Tracing | Langfuse 或 OpenTelemetry（可自建） | 关键是"能定位失败步" |
+| 数据库 | **PostgreSQL + pgvector** | 正式 Demo 唯一数据源；不保留 SQLite 运行路径 |
+| 执行隔离 | PostgreSQL 只读角色 + statement_timeout + 行数上限 | MCP 服务端是唯一执行边界 |
+| Tracing | 自建轻量 span（后续可接 OpenTelemetry） | 关键是"能定位失败步" |
 
 ## 四、目录结构（规划）
 
 ```
 QueryAgent/
 ├── AGENTS.md              # 本文件
-├── DESIGN.md              # 详细设计
-├── pyproject.toml         # 依赖与配置
+├── DESIGN.md              # 核心设计与约束
+├── docs/                  # Web Demo 设计与验收标准
+├── docker-compose.yml     # PostgreSQL、FastAPI、前端一键启动编排
+├── docker/                # 后端/前端镜像与 Nginx 配置
+├── frontend/              # React + Vite + TypeScript 展示界面
+├── pyproject.toml         # Python 依赖与配置
 ├── src/queryagent/
 │   ├── agent/             # agent loop 主控
-│   ├── llm/               # 模型客户端（闭源 + Qwen）
-│   ├── tools/             # MCP db 工具
+│   ├── api/               # FastAPI HTTP/SSE 接口（后续阶段）
+│   ├── llm/               # 模型客户端（DeepSeek/Qwen/OpenAI）
+│   ├── tools/             # PostgreSQL MCP 工具与客户端
 │   ├── schema/            # schema 感知/选择
 │   ├── reliability/       # 结果校验 + 自纠正
 │   ├── eval/              # 评测 harness
 │   └── observability/     # tracing / 指标
-├── eval_sets/             # BIRD 子集 + 自造中文查询集
-├── data/                  # DB schema、样本数据
-└── scripts/               # 评测运行脚本
+├── eval_sets/             # 评测查询集
+├── data/                  # 不提交运行时数据库文件
+└── scripts/               # 初始化、评测与维护脚本
 ```
 
 ## 五、核心约定（工作规则，MUST）
@@ -68,17 +73,30 @@ QueryAgent/
 
 ## 七、当前状态
 
-- [x] 设计文档（AGENTS.md + DESIGN.md）已完成
-- [ ] 代码尚未开始 —— 所有模块待实现
+- [x] 原有 Text-to-SQL Agent、评测 harness、SQLite/MCP 原型和 RBAC 测试已存在
+- [x] Git 仓库已初始化，`main` 与 GitHub 远端同步
+- [x] 本地 Web Demo 产品需求已确认，见 `docs/WEB_DEMO_DESIGN.md`
+- [ ] Phase 0：工程骨架与 Compose 基线
+- [ ] Phase 1：PostgreSQL + pgvector 模拟生产数据库
+- [ ] Phase 2：PostgreSQL MCP 与数据浏览工具
+- [ ] Phase 3：Agent/Provider/FastAPI/SSE
+- [ ] Phase 4：React 查询工作台
+- [ ] Phase 5：数据浏览与重置
+- [ ] Phase 6：评测控制台
+- [ ] Phase 7：一键启动、README 与最终验收
 
-## 八、下一步（接手时的启动顺序）
+## 八、接手与实施顺序
 
-1. 读 `DESIGN.md` 全文。
-2. 初始化工程：`pyproject.toml` + 目录骨架。
-3. 先实现 **评测 harness（eval/）** 骨架 + 一个最小 agent loop，跑通一个"能出数字"的最小闭环。
-4. 再逐步加 schema 感知、可靠性、MCP 工具层、tracing。
+1. 先读本文件、`DESIGN.md` 和 `docs/WEB_DEMO_DESIGN.md`。
+2. 正式运行路径统一为 PostgreSQL + pgvector；SQLite 兼容代码仅在迁移阶段保留，Phase 1 后删除。
+3. 聊天、数据浏览、搜索和导出必须经过 PostgreSQL MCP；初始化/重置是唯一允许后端直连数据库的维护操作。
+4. 每个阶段先跑自动化测试，测试通过后独立提交、推送并合并到远端 `main`。
+5. 任何可靠性、权限或性能改动都必须有可复现验证，不接受只凭主观判断的改动。
 
 ## 九、验证方式
 
-- 跑评测：`python -m scripts.run_eval`（或等价命令），输出成功率/成本/延迟表格。
-- 每个里程碑都要有可复现的数字，写进 `eval_sets/` 或评测报告。
+- 当前基线测试：`python -m pytest`。
+- 迁移后评测：通过 Docker/后端统一使用 PostgreSQL，输出成功率/成本/延迟表格。
+- 前端阶段：运行 TypeScript 检查、组件测试和生产构建。
+- Compose 阶段：运行 `docker compose config`、镜像构建和端到端冒烟测试。
+- 每个里程碑都要有可复现的数字，写进评测报告或阶段产物。
