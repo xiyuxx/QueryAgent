@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from queue import Queue
 from threading import Thread
@@ -16,12 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from .runtime import AppServices
 from ..agent.loop import AgentLoop
-from ..llm import ProviderRegistry, RoutedLLMClient
-from ..reliability.validator import ResultValidator
-from ..schema.mcp import MCPSchemaRetriever
-from ..tools.access import AccessConfig, load_access_config
-from ..tools.mcp_client import MCPExecutor
 
 
 class ChatHistoryItem(BaseModel):
@@ -63,71 +58,6 @@ class ChatRequest(BaseModel):
         return value.strip().lower() if value else None
 
 
-@dataclass
-class AppServices:
-    """Lazy runtime dependencies, with injection points for unit tests."""
-
-    registry: ProviderRegistry | None = None
-    executor: Any | None = None
-    schema_retriever: Any | None = None
-    access_config: AccessConfig | None = None
-
-    def get_registry(self) -> ProviderRegistry:
-        if self.registry is None:
-            self.registry = ProviderRegistry()
-        return self.registry
-
-    def get_access_config(self) -> AccessConfig:
-        if self.access_config is None:
-            self.access_config = load_access_config()
-        return self.access_config
-
-    def get_executor(self) -> Any:
-        if self.executor is None:
-            dsn = os.environ.get("QUERYAGENT_MCP_DSN", "").strip()
-            if not dsn:
-                raise RuntimeError("QUERYAGENT_MCP_DSN is not configured")
-            self.executor = MCPExecutor(
-                dsn,
-                timeout_s=float(os.environ.get("QUERYAGENT_MCP_TIMEOUT_S", "30")),
-            )
-        return self.executor
-
-    def get_schema_retriever(self) -> Any:
-        if self.schema_retriever is None:
-            self.schema_retriever = MCPSchemaRetriever(self.get_executor())
-        return self.schema_retriever
-
-    def build_agent(
-        self,
-        provider: str | None,
-        event_callback,
-    ) -> AgentLoop:
-        llm = RoutedLLMClient(
-            self.get_registry(),
-            selected_provider=provider,
-            event_callback=event_callback,
-        )
-        return AgentLoop(
-            llm=llm,
-            executor=self.get_executor(),
-            validator=ResultValidator(),
-            schema_retriever=self.get_schema_retriever(),
-            enable_router=True,
-            enable_summary=True,
-            enable_audit=_env_bool("QUERYAGENT_ENABLE_AUDIT", False),
-            max_corrections=int(os.environ.get("QUERYAGENT_MAX_CORRECTIONS", "3")),
-            max_steps=int(os.environ.get("QUERYAGENT_MAX_STEPS", "5")),
-        )
-
-    def close(self) -> None:
-        close = getattr(self.executor, "close", None)
-        if callable(close):
-            close()
-        self.executor = None
-        self.schema_retriever = None
-
-
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -152,7 +82,7 @@ def _history_payload(items: list[ChatHistoryItem]) -> list[dict[str, Any]]:
     return result
 
 
-def _role_payload(config: AccessConfig) -> list[dict[str, Any]]:
+def _role_payload(config) -> list[dict[str, Any]]:
     roles: list[dict[str, Any]] = []
     for name, policy in sorted(config.roles.items()):
         roles.append(
@@ -201,8 +131,6 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
 
     @application.get("/api/system/status")
     def system_status() -> dict[str, object]:
-        # This endpoint is intentionally cheap and does not initialize a model
-        # or database connection. Readiness probes are added with the data UI.
         providers = {
             name: bool(os.environ.get(f"{name.upper()}_API_KEY", "").strip())
             for name in ("deepseek", "qwen", "openai")
@@ -230,6 +158,86 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
             "roles": _role_payload(config),
         }
 
+    @application.get("/api/data/tables")
+    def data_tables(role: str = "readonly") -> dict[str, Any]:
+        config = runtime.get_access_config()
+        role = role.strip().lower()
+        if config.get_role(role) is None:
+            raise HTTPException(status_code=400, detail=f"unknown role: {role}")
+        result = runtime.get_executor().list_tables(role=role)
+        return _mcp_or_http_error(result)
+
+    @application.get("/api/data/table/{table}")
+    def data_table(
+        table: str,
+        role: str = "readonly",
+        page: int = 1,
+        page_size: int = 50,
+        search: str = "",
+    ) -> dict[str, Any]:
+        config = runtime.get_access_config()
+        role = role.strip().lower()
+        if config.get_role(role) is None:
+            raise HTTPException(status_code=400, detail=f"unknown role: {role}")
+        if page < 1 or page_size < 1 or page_size > 100:
+            raise HTTPException(status_code=400, detail="page must be >= 1 and page_size must be 1..100")
+        executor = runtime.get_executor()
+        result = (
+            executor.search_table(table, search, role=role, page=page, page_size=page_size)
+            if search.strip()
+            else executor.browse_table(table, role=role, page=page, page_size=page_size)
+        )
+        return _mcp_or_http_error(result)
+
+    @application.get("/api/data/table/{table}/csv")
+    def data_table_csv(
+        table: str,
+        role: str = "readonly",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> StreamingResponse:
+        config = runtime.get_access_config()
+        role = role.strip().lower()
+        if config.get_role(role) is None:
+            raise HTTPException(status_code=400, detail=f"unknown role: {role}")
+        if page < 1 or page_size < 1 or page_size > 100:
+            raise HTTPException(status_code=400, detail="page must be >= 1 and page_size must be 1..100")
+        result = runtime.get_executor().export_table_csv(
+            table, role=role, page=page, page_size=page_size
+        )
+        if result.get("error"):
+            raise _mcp_http_exception(result)
+        csv_text = result.get("csv", "")
+        filename = result.get("filename", f"{table}.csv")
+        return StreamingResponse(
+            iter([csv_text]),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @application.post("/api/evaluations")
+    def create_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
+        dataset = str(payload.get("dataset", "mini")).strip().lower()
+        if dataset not in {"mini", "warehouse"}:
+            raise HTTPException(status_code=400, detail="dataset must be mini or warehouse")
+        registry = runtime.get_registry()
+        selected = str(payload.get("provider") or registry.default_provider).lower()
+        if selected not in {item.name for item in registry.available()}:
+            raise HTTPException(status_code=400, detail=f"provider {selected!r} 未配置")
+        run = runtime.evaluation_manager.create(dataset)
+        runtime.evaluation_manager.start(
+            run,
+            runtime.build_evaluation_worker(dataset, selected),
+        )
+        return run.public_dict()
+
+    @application.get("/api/evaluations/{run_id}")
+    def get_evaluation(run_id: str) -> dict[str, Any]:
+        run = runtime.evaluation_manager.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="evaluation run not found")
+        return run.public_dict()
+
     @application.post("/api/chat/stream")
     async def chat_stream(request: ChatRequest) -> StreamingResponse:
         registry = runtime.get_registry()
@@ -249,16 +257,7 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
 
         def callback(event: str, payload: dict[str, Any]) -> None:
             if event == "provider":
-                events.put(
-                    (
-                        "stage",
-                        {
-                            "stage": "model",
-                            "status": "done",
-                            **payload,
-                        },
-                    )
-                )
+                events.put(("stage", {"stage": "model", "status": "done", **payload}))
             else:
                 events.put((event, payload))
 
@@ -272,19 +271,12 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
                     event_callback=callback,
                 )
             except Exception as exc:  # never expose a worker traceback in SSE
-                callback(
-                    "error",
-                    {
-                        "code": "INTERNAL_ERROR",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
-                )
+                callback("error", {"code": "INTERNAL_ERROR", "error": f"{type(exc).__name__}: {exc}"})
                 callback("done", {"status": "failed"})
             finally:
                 events.put(None)
 
-        thread = Thread(target=worker, daemon=True, name="queryagent-agent")
-        thread.start()
+        Thread(target=worker, daemon=True, name="queryagent-agent").start()
 
         async def stream() -> AsyncIterator[str]:
             while True:
@@ -292,10 +284,6 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
                 if item is None:
                     break
                 event, payload = item
-                # ``text`` is an internal callback name; the browser contract
-                # calls these incremental pieces ``token``.
-                if event == "text":
-                    event = "token"
                 yield _sse(event, payload)
 
         return StreamingResponse(
@@ -309,6 +297,20 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
         )
 
     return application
+
+
+def _mcp_or_http_error(result: dict[str, Any]) -> dict[str, Any]:
+    if result.get("error"):
+        raise _mcp_http_exception(result)
+    return result
+
+
+def _mcp_http_exception(result: dict[str, Any]) -> HTTPException:
+    error = result.get("error") or {}
+    code = error.get("code", "MCP_ERROR") if isinstance(error, dict) else "MCP_ERROR"
+    message = error.get("message", "MCP request failed") if isinstance(error, dict) else str(error)
+    status = 403 if code in {"ACCESS_DENIED", "TABLE_NOT_ALLOWED", "SENSITIVE_COLUMN"} else 400
+    return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
 app = create_app()

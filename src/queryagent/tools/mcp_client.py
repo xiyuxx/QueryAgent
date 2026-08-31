@@ -56,6 +56,7 @@ class MCPExecutor:
         self._stdio_cm = None
         self._error: str | None = None
         self._closed = False
+        self._call_lock = threading.Lock()
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="queryagent-mcp")
         self._thread.start()
@@ -122,11 +123,14 @@ class MCPExecutor:
             return {"error": {"code": "MCP_CLOSED", "message": "MCP executor is closed"}}
         if self._session is None:
             return {"error": {"code": "MCP_UNAVAILABLE", "message": self._error or "MCP session not initialized"}}
-        future = asyncio.run_coroutine_threadsafe(self._call(tool_name, arguments), self._loop)
-        try:
-            return future.result(timeout=self.timeout_s)
-        except Exception as exc:  # noqa: BLE001
-            return {"error": {"code": "MCP_CALL_FAILED", "message": f"{type(exc).__name__}: {exc}"}}
+        # MCP stdio sessions are single-stream. Serialize calls so concurrent
+        # browser requests cannot interleave protocol messages.
+        with self._call_lock:
+            future = asyncio.run_coroutine_threadsafe(self._call(tool_name, arguments), self._loop)
+            try:
+                return future.result(timeout=self.timeout_s)
+            except Exception as exc:  # noqa: BLE001
+                return {"error": {"code": "MCP_CALL_FAILED", "message": f"{type(exc).__name__}: {exc}"}}
 
     async def _call(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = await self._session.call_tool(tool_name, arguments)
