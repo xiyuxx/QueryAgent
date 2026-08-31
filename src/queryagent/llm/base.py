@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Type
+from typing import Optional, Sequence, Type
 
 from pydantic import BaseModel
 
@@ -34,6 +34,12 @@ class IntentResult(BaseModel):
     intent: str = "query"  # query / metadata / chat
 
 
+class TextAnswer(BaseModel):
+    """普通聊天或 schema 问答的结构化文本结果。"""
+
+    answer: str
+
+
 @dataclass
 class Usage:
     """单次 LLM 调用的消耗统计。"""
@@ -56,14 +62,19 @@ class LLMResponse:
 
 
 SQL_SYSTEM_PROMPT = (
-    "你是一个 Text-to-SQL 助手。根据给定的数据库 schema 和用户问题，"
-    "生成一条可执行的 SQLite SQL 查询，并用一句中文说明思路。"
+    "你是一个 Text-to-SQL 助手。根据给定的 PostgreSQL schema 和用户问题，"
+    "生成一条可执行的 PostgreSQL SQL 查询，并用一句中文说明思路。"
     "输出一个 JSON 对象，包含 sql 与 explanation 两个字段。"
 )
 
 AUDIT_SYSTEM_PROMPT = (
     "你是一个 SQL 结果校验器。判断给定 SQL 的执行结果是否正确、完整地回答了用户问题。"
     "输出 JSON 对象，含 ok（布尔）与 reason（字符串）字段；结果有误时 ok=false 并说明原因。"
+)
+
+TEXT_SYSTEM_PROMPT = (
+    "你是 QueryAgent 的中文数据分析助手。根据给定上下文回答用户，"
+    "不要编造不可见的数据。输出 JSON 对象，含 answer 字段。"
 )
 
 VALUE_EXTRACT_SYSTEM = (
@@ -87,8 +98,37 @@ def build_intent_prompt(question: str) -> str:
     return f"用户输入：{question}\n\n请判断其意图（query/metadata/chat）。"
 
 
-def build_sql_prompt(question: str, schema_ddl: str, feedback: list[str]) -> str:
-    parts = ["数据库 schema（DDL）：\n" + schema_ddl]
+def _format_history(history: Sequence[dict] | None) -> str:
+    if not history:
+        return ""
+    lines: list[str] = []
+    for item in history:
+        question = item.get("question") or item.get("user") or ""
+        answer = item.get("answer") or item.get("assistant") or item.get("content") or ""
+        sql = item.get("sql") or ""
+        result = item.get("result_summary") or item.get("result") or ""
+        if question:
+            lines.append("用户：" + str(question))
+        if answer:
+            lines.append("助手：" + str(answer))
+        if sql:
+            lines.append("SQL：" + str(sql))
+        if result:
+            lines.append("结果摘要：" + str(result))
+    return "\n".join(lines)
+
+
+def build_sql_prompt(
+    question: str,
+    schema_ddl: str,
+    feedback: list[str],
+    history: Sequence[dict] | None = None,
+) -> str:
+    parts: list[str] = []
+    history_text = _format_history(history)
+    if history_text:
+        parts.append("当前角色的会话上下文：\n" + history_text)
+    parts.append("数据库 schema（DDL）：\n" + schema_ddl)
     parts.append("用户问题：" + question)
     if feedback:
         parts.append("上一次生成失败，请根据以下错误信息修正：")
@@ -104,6 +144,21 @@ def build_audit_prompt(question: str, sql: str, result_preview: str) -> str:
         "该结果是否正确回答了用户问题？若明显错误（列不对、值异常、空结果但问题期望有数据、"
         "聚合方式错误等），输出 ok=false 并给出具体原因；否则 ok=true。"
     )
+
+
+def build_text_prompt(
+    question: str,
+    context: str = "",
+    history: Sequence[dict] | None = None,
+) -> str:
+    parts: list[str] = []
+    history_text = _format_history(history)
+    if history_text:
+        parts.append("当前角色的最近会话：\n" + history_text)
+    if context:
+        parts.append("可用上下文：\n" + context)
+    parts.append("用户问题：" + question)
+    return "\n\n".join(parts)
 
 
 def build_value_prompt(question: str, schema_context: str = "") -> str:
@@ -128,10 +183,15 @@ class LLMClient(ABC):
         """生成结构化输出。response_model 提供 JSON Schema 约束。"""
 
     def generate_sql(
-        self, question: str, schema_ddl: str, feedback: list[str], strategy: str = "standard"
+        self,
+        question: str,
+        schema_ddl: str,
+        feedback: list[str],
+        strategy: str = "standard",
+        history: Sequence[dict] | None = None,
     ) -> LLMResponse:
         """生成 SQL 候选。strategy 控制推理方式（standard/divide/plan）。"""
-        prompt = build_sql_prompt(question, schema_ddl, feedback)
+        prompt = build_sql_prompt(question, schema_ddl, feedback, history)
         if strategy and strategy != "standard":
             prompt += "\n\n推理策略：" + STRATEGY_HINTS.get(strategy, "")
         resp = self.generate(
@@ -169,3 +229,38 @@ class LLMClient(ABC):
         if resp.parsed is not None:
             return resp.parsed.intent
         return "query"
+
+    def answer_text(
+        self,
+        question: str,
+        *,
+        context: str = "",
+        history: Sequence[dict] | None = None,
+    ) -> LLMResponse:
+        """Generate a natural-language answer for chat/schema requests."""
+        response = self.generate(
+            build_text_prompt(question, context, history),
+            system=TEXT_SYSTEM_PROMPT,
+            response_model=TextAnswer,
+        )
+        if response.parsed is None and response.content:
+            response.parsed = TextAnswer.model_validate_json(response.content)
+        return response
+
+    def summarize_result(
+        self,
+        question: str,
+        sql: str,
+        columns: list[str],
+        rows: list[tuple],
+    ) -> LLMResponse:
+        """Generate a concise Chinese summary from a completed query result."""
+        preview = "\n".join([", ".join(columns), *[str(tuple(row)) for row in rows[:10]]])
+        prompt = (
+            f"用户问题：{question}\nSQL：{sql}\n结果：\n{preview}\n\n"
+            "请用简洁中文总结结果，必须忠实于表格，不要补造未返回的数据。"
+        )
+        response = self.generate(prompt, system=TEXT_SYSTEM_PROMPT, response_model=TextAnswer)
+        if response.parsed is None and response.content:
+            response.parsed = TextAnswer.model_validate_json(response.content)
+        return response

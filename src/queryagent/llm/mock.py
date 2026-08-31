@@ -63,7 +63,7 @@ class MockLLM(LLMClient):
         # 该客户端走 generate_sql 覆盖路径；generate 仅满足接口完整性。
         return LLMResponse(content="", usage=Usage())
 
-    def generate_sql(self, question, schema_ddl, feedback) -> LLMResponse:
+    def generate_sql(self, question, schema_ddl, feedback, strategy="standard", history=None) -> LLMResponse:
         t0 = time.perf_counter()
         correcting = bool(feedback)
         sql, explanation = self._rule_generate(question, correcting)
@@ -81,6 +81,24 @@ class MockLLM(LLMClient):
             latency_ms=latency_ms,
             parsed=SQLCandidate(sql=sql, explanation=explanation),
         )
+
+    def answer_text(self, question, *, context="", history=None) -> LLMResponse:
+        return LLMResponse(
+            content="",
+            usage=Usage(),
+            parsed=__import__("queryagent.llm.base", fromlist=["TextAnswer"]).TextAnswer(
+                answer="这是一个离线 Mock 回答。"
+            ),
+        )
+
+    def summarize_result(self, question, sql, columns, rows) -> LLMResponse:
+        if not rows:
+            answer = "查询完成，结果为空。"
+        elif len(rows) == 1 and len(rows[0]) == 1:
+            answer = f"查询完成，结果为 {rows[0][0]}。"
+        else:
+            answer = f"查询完成，共返回 {len(rows)} 行。"
+        return LLMResponse(content="", usage=Usage(), parsed=__import__("queryagent.llm.base", fromlist=["TextAnswer"]).TextAnswer(answer=answer))
 
     def audit(self, question, sql, result_preview) -> LLMResponse:
         # 规则生成器不做语义自审（无真实语义判断能力），恒通过。
