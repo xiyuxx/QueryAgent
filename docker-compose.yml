@@ -25,7 +25,11 @@ services:
       - .env
     environment:
       POSTGRES_HOST: postgres
+      # Only db-init receives the admin DSN. It creates the reader role and
+      # loads data; normal query traffic never uses this credential.
       QUERYAGENT_DB_DSN: postgresql://${POSTGRES_USER:-queryagent}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
+      QUERYAGENT_READER_USER: ${QUERYAGENT_READER_USER:-queryagent_reader}
+      QUERYAGENT_READER_PASSWORD: ${QUERYAGENT_READER_PASSWORD:-queryagent_reader}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,7 +47,12 @@ services:
       - .env
     environment:
       POSTGRES_HOST: postgres
-      QUERYAGENT_DB_DSN: postgresql://${POSTGRES_USER:-queryagent}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
+      # Maintenance operations use the admin DSN; MCP receives only the
+      # database-level read-only account below.
+      QUERYAGENT_ADMIN_DSN: postgresql://${POSTGRES_USER:-queryagent}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
+      QUERYAGENT_MCP_DSN: postgresql://${QUERYAGENT_READER_USER:-queryagent_reader}:${QUERYAGENT_READER_PASSWORD:-queryagent_reader}@postgres:5432/${POSTGRES_DB:-queryagent_demo}
+      QUERYAGENT_READER_USER: ${QUERYAGENT_READER_USER:-queryagent_reader}
+      QUERYAGENT_READER_PASSWORD: ${QUERYAGENT_READER_PASSWORD:-queryagent_reader}
     depends_on:
       db-init:
         condition: service_completed_successfully
