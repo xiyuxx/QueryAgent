@@ -12,10 +12,13 @@ Config format (YAML):
           - orders
           - customers
           - products
-        blocked_columns:         # columns stripped from DDL and results
+        blocked_columns:         # legacy option: remove columns from old adapters
           employees:
             - salary
             - national_id
+        raw_columns:              # sensitive columns allowed without masking
+          customers:
+            - phone
 
       hr:
         allowed_tables:
@@ -25,17 +28,16 @@ Config format (YAML):
         blocked_columns: {}
 
       readonly:                  # no allowed_tables = all tables visible
-        blocked_columns:
-          customers:
-            - phone
-            - email
+        blocked_columns: {}
+        raw_columns: {}           # sensitive values are masked unless listed
 
     default_role: readonly       # used when no role is supplied
 
 Policy rules:
 - allowed_tables: None means the role may see every table.
-- blocked_columns: columns are stripped from DDL returned by get_schema,
-  and from result rows returned by query. The model never sees them.
+- blocked_columns is retained for legacy adapters that remove columns;
+- PostgreSQL Web Demo sensitive columns remain named and are masked as
+  `******` unless the role lists them in raw_columns (admin is unrestricted);
 - A role unknown to the config is rejected with ACCESS_DENIED.
 """
 from __future__ import annotations
@@ -57,6 +59,10 @@ class RolePolicy:
     name: str
     allowed_tables: set[str] | None = None          # None = all
     blocked_columns: dict[str, set[str]] = field(default_factory=dict)
+    # A blocked sensitive column remains visible in PostgreSQL schema/results
+    # but is masked. ``raw_columns`` is an explicit opt-in for roles such as
+    # HR; admin is treated as unrestricted by ``may_return_raw``.
+    raw_columns: dict[str, set[str]] = field(default_factory=dict)
 
     def may_access_table(self, table: str) -> bool:
         if self.allowed_tables is None:
@@ -66,6 +72,20 @@ class RolePolicy:
     def visible_columns(self, table: str, columns: list[str]) -> list[str]:
         blocked = self.blocked_columns.get(table.lower(), set())
         return [c for c in columns if c.lower() not in blocked]
+
+    def may_return_raw(self, table: str, column: str) -> bool:
+        """Whether a sensitive column may be returned without masking.
+
+        Sensitive fields are masked by default. A role must explicitly list a
+        field in ``raw_columns`` or be ``admin`` to receive its raw value.
+        ``blocked_columns`` remains useful for legacy callers that remove a
+        field entirely, but it does not grant raw access.
+        """
+        table_name = table.lower()
+        column_name = column.lower()
+        if self.name == "admin":
+            return True
+        return column_name in self.raw_columns.get(table_name, set())
 
 
 @dataclass
@@ -87,16 +107,22 @@ def _parse_config(raw: dict) -> AccessConfig:
     for role_name, spec in (raw.get("roles") or {}).items():
         spec = spec or {}
         allowed_raw = spec.get("allowed_tables")
-        allowed = {t.lower() for t in allowed_raw} if allowed_raw is not None else None
+        allowed = {str(t).lower() for t in allowed_raw} if allowed_raw is not None else None
         blocked_raw = spec.get("blocked_columns") or {}
         blocked = {
-            table.lower(): {col.lower() for col in cols}
+            str(table).lower(): {str(col).lower() for col in cols}
             for table, cols in blocked_raw.items()
+        }
+        raw_raw = spec.get("raw_columns") or {}
+        raw = {
+            str(table).lower(): {str(col).lower() for col in cols}
+            for table, cols in raw_raw.items()
         }
         roles[role_name.lower()] = RolePolicy(
             name=role_name.lower(),
             allowed_tables=allowed,
             blocked_columns=blocked,
+            raw_columns=raw,
         )
     default_role = (raw.get("default_role") or "readonly").lower()
     if default_role not in roles:
@@ -105,21 +131,24 @@ def _parse_config(raw: dict) -> AccessConfig:
 
 
 def load_access_config(path: str | Path | None = None) -> AccessConfig:
-    """Load role config from YAML if pyyaml is available, else JSON, else a safe default."""
-    if path is None:
-        path = os.environ.get("QUERYAGENT_ROLES_CONFIG", "")
-    if path:
-        path = Path(path)
-        if path.exists():
-            text = path.read_text(encoding="utf-8")
-            try:
-                import yaml  # optional dep
-                raw = yaml.safe_load(text)
-            except ImportError:
-                raw = json.loads(text)
-            return _parse_config(raw or {})
+    """Load role config from an explicit path or the project config file."""
+    configured_path = path or os.environ.get("QUERYAGENT_ROLES_CONFIG", "")
+    candidates = [Path(configured_path)] if configured_path else [
+        Path.cwd() / "queryagent_roles.yaml",
+        Path(__file__).resolve().parents[3] / "queryagent_roles.yaml",
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        text = candidate.read_text(encoding="utf-8")
+        try:
+            import yaml  # optional dep
+            raw = yaml.safe_load(text)
+        except ImportError:
+            raw = json.loads(text)
+        return _parse_config(raw or {})
 
-    # Safe default: one "readonly" role that can see everything
+    # Safe default: one "readonly" role that can see every table.
     return AccessConfig(
         roles={"readonly": RolePolicy(name="readonly")},
         default_role="readonly",

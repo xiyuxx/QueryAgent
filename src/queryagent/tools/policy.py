@@ -23,7 +23,25 @@ _DENIED_EXPRESSIONS = (
     exp.Merge,
     exp.Update,
 )
-_DENIED_FUNCTIONS = {"pg_sleep", "read_csv", "read_json", "read_parquet"}
+_DENIED_FUNCTIONS = {
+    "pg_sleep",
+    "read_csv",
+    "read_json",
+    "read_parquet",
+    "pg_read_file",
+    "pg_read_binary_file",
+    "pg_ls_dir",
+    "pg_stat_file",
+    "lo_import",
+    "lo_export",
+    "dblink",
+    "dblink_exec",
+    "nextval",
+    "set_config",
+    "set_role",
+    "pg_advisory_lock",
+    "pg_advisory_xact_lock",
+}
 _ALLOWED_ROOTS = (exp.Select, exp.Union, exp.Intersect, exp.Except)
 
 
@@ -53,10 +71,26 @@ class SQLPolicy:
         *,
         dialect: str = "sqlite",
         allowed_tables: set[str] | None = None,
+        allowed_schemas: set[str] | None = None,
+        allowed_catalogs: set[str] | None = None,
         max_sql_length: int = 20_000,
     ) -> None:
         self.dialect = dialect
-        self.allowed_tables = {t.lower() for t in allowed_tables} if allowed_tables else None
+        self.allowed_tables = (
+            {t.lower() for t in allowed_tables}
+            if allowed_tables is not None
+            else None
+        )
+        self.allowed_schemas = (
+            {s.lower() for s in allowed_schemas}
+            if allowed_schemas is not None
+            else None
+        )
+        self.allowed_catalogs = (
+            {c.lower() for c in allowed_catalogs}
+            if allowed_catalogs is not None
+            else None
+        )
         self.max_sql_length = max_sql_length
 
     def validate(self, sql: str) -> SQLPolicyResult:
@@ -93,13 +127,42 @@ class SQLPolicy:
             for cte in statement.find_all(exp.CTE)
             if cte.alias_or_name
         }
-        tables = sorted(
-            {
-                table.name.lower()
-                for table in statement.find_all(exp.Table)
-                if table.name and table.name.lower() not in cte_names
-            }
-        )
+        table_nodes = [
+            table
+            for table in statement.find_all(exp.Table)
+            if table.name and table.name.lower() not in cte_names
+        ]
+        if self.allowed_schemas is not None:
+            denied_schemas = sorted(
+                {
+                    (table.db or "public").lower()
+                    for table in table_nodes
+                    if (table.db or "public").lower() not in self.allowed_schemas
+                }
+            )
+            if denied_schemas:
+                return SQLPolicyResult(
+                    False,
+                    "SCHEMA_NOT_ALLOWED",
+                    "schema access is not allowed: " + ", ".join(denied_schemas),
+                    tables=sorted({table.name.lower() for table in table_nodes}),
+                )
+        if self.allowed_catalogs is not None:
+            denied_catalogs = sorted(
+                {
+                    (table.catalog or "").lower()
+                    for table in table_nodes
+                    if (table.catalog or "").lower() not in self.allowed_catalogs
+                }
+            )
+            if denied_catalogs:
+                return SQLPolicyResult(
+                    False,
+                    "DATABASE_NOT_ALLOWED",
+                    "database qualification is not allowed: " + ", ".join(denied_catalogs),
+                    tables=sorted({table.name.lower() for table in table_nodes}),
+                )
+        tables = sorted({table.name.lower() for table in table_nodes})
         if self.allowed_tables is not None:
             denied = [name for name in tables if name not in self.allowed_tables]
             if denied:

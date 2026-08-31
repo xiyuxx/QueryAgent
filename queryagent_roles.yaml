@@ -25,7 +25,7 @@ roles:
       - credit_cards
     blocked_columns: {}
 
-  # hr: HR tables, salary figures are visible
+  # hr: HR tables, salary figures and synthetic national_id are visible
   hr:
     allowed_tables:
       - employees
@@ -33,6 +33,9 @@ roles:
       - salaries
       - attendance
     blocked_columns: {}
+    raw_columns:
+      employees:
+        - national_id
 
   # logistics: supply chain tables only
   logistics:
@@ -43,17 +46,14 @@ roles:
       - delivery_routes
     blocked_columns: {}
 
-  # admin: sees everything, no blocked columns
+  # admin: sees everything, including raw synthetic sensitive fields
   admin:
     blocked_columns: {}
+    raw_columns: {}
 
-  # readonly: safe default — all tables visible, sensitive columns blocked
+  # readonly: all business tables visible, sensitive values masked by default
   readonly:
-    blocked_columns:
-      customers:
-        - phone
-        - email
-      employees:
-        - national_id
+    blocked_columns: {}
+    raw_columns: {}
 
 default_role: readonly
