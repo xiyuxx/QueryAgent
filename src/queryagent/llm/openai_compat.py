@@ -44,10 +44,12 @@ class OpenAICompatClient(LLMClient):
         output_price_per_1k: float = 0.0011,  # DeepSeek-chat 官方价（估算）
     ) -> None:
         self.base_url = (
-            base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.deepseek.com"
+            base_url
+            if base_url is not None
+            else os.environ.get("OPENAI_BASE_URL") or "https://api.deepseek.com"
         ).rstrip("/")
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-        self.model = model
+        self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
+        self.model = model if model is not None else os.environ.get("OPENAI_MODEL", "deepseek-v4-flash")
         self.timeout_s = timeout_s
         self.max_tokens = max_tokens
         self.temperature = temperature

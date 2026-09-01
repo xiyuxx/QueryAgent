@@ -37,15 +37,18 @@ class EvalHarness:
         self,
         agent_factory: Callable[[str | None], AgentLoop],
         executor_factory: Callable[[str | None], QueryExecutor],
+        *,
+        role: str = "readonly",
     ) -> None:
         self.agent_factory = agent_factory
         self.executor_factory = executor_factory
+        self.role = role
 
     def run_case(self, case: EvalCase) -> CaseMetrics:
         t0 = time.perf_counter()
         agent = self.agent_factory(case.db_path)
         try:
-            result = agent.run(case.question)
+            result = agent.run(case.question, role=self.role)
         finally:
             close = getattr(agent.executor, "close", None)
             if callable(close):
@@ -54,7 +57,10 @@ class EvalHarness:
 
         gold_executor = self.executor_factory(case.db_path)
         try:
-            gold = gold_executor.execute(case.gold_sql)
+            try:
+                gold = gold_executor.execute(case.gold_sql, role=self.role)
+            except TypeError:
+                gold = gold_executor.execute(case.gold_sql)
         finally:
             close = getattr(gold_executor, "close", None)
             if callable(close):
@@ -70,6 +76,9 @@ class EvalHarness:
         return CaseMetrics(
             case_id=case.id,
             status=result.status,
+            question=case.question,
+            sql=result.sql or "",
+            gold_sql=case.gold_sql,
             exec_match=exec_match,
             exact_match=exact,
             steps=result.steps,

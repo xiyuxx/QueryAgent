@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 class CaseMetrics:
     case_id: str
     status: str
+    question: str = ""
+    sql: str = ""
+    gold_sql: str = ""
     exec_match: bool | None = None
     exact_match: bool = False
     steps: int = 0
@@ -21,6 +24,20 @@ class CaseMetrics:
 @dataclass
 class RunReport:
     cases: list[CaseMetrics] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "total": self.total,
+            "executed": self.executed,
+            "exec_accuracy": self.exec_accuracy,
+            "exact_match_rate": self.exact_match_rate,
+            "avg_steps": self.avg_steps,
+            "avg_corrections": self.avg_corrections,
+            "avg_tokens": self.avg_tokens,
+            "total_cost_usd": self.total_cost_usd,
+            "avg_latency_ms": self.avg_latency_ms,
+            "cases": [case.__dict__ for case in self.cases],
+        }
 
     @property
     def total(self) -> int:
