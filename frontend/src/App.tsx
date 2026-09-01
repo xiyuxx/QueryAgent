@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrowserRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { HashRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import {
   BarChartOutlined,
   LeftOutlined,
@@ -63,6 +63,7 @@ const STORAGE_KEY = "queryagent.sessions.v1";
 const ROLE_KEY = "queryagent.role";
 const PROVIDER_KEY = "queryagent.provider";
 const SESSION_KEY = "queryagent.activeSession";
+const API_URL_KEY = "queryagent.apiUrl";
 
 function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -81,8 +82,13 @@ function saveSessions(sessions: Session[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
 }
 
+function apiUrl(path: string) {
+  const configured = localStorage.getItem(API_URL_KEY)?.trim();
+  return configured ? `${configured.replace(/\/$/, "")}${path}` : path;
+}
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(apiUrl(url), init);
   if (!response.ok) {
     let message = `请求失败 (${response.status})`;
     try {
@@ -127,6 +133,9 @@ function Shell({
           <NavLink className={({ isActive }) => isActive ? "nav-link active" : "nav-link"} to="/console"><DashboardOutlined />评测</NavLink>
         </nav>
         <div className="top-controls">
+          <label className="api-url-control">后端
+            <input aria-label="后端地址" defaultValue={localStorage.getItem(API_URL_KEY) || ""} placeholder="本机默认" onBlur={(event) => { const value = event.target.value.trim(); if (value) localStorage.setItem(API_URL_KEY, value); else localStorage.removeItem(API_URL_KEY); window.location.reload(); }} />
+          </label>
           <label>模型
             <select value={provider} onChange={(event) => onProvider(event.target.value)} disabled={!providers.length}>
               <option value="">未配置</option>
@@ -223,7 +232,7 @@ function QueryPage({ role, provider, sessions, activeId, onSessions, onSelectSes
     const history = turns.map((item) => ({ role: item.role, question: item.question, answer: item.answer, sql: item.sql, result_summary: item.result?.answer || "" }));
     onSessions(sessions.map((session) => session.id === active.id ? { ...session, title: session.turns.length ? session.title : text.slice(0, 24), turns: [...session.turns, turn], updatedAt: new Date().toISOString() } : session));
     try {
-      const response = await fetch("/api/chat/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: text, role, provider, history }) });
+      const response = await fetch(apiUrl("/api/chat/stream"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: text, role, provider, history }) });
       if (!response.ok || !response.body) throw new Error(`查询请求失败 (${response.status})`);
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; let answer = "";
       const apply = (event: string, data: any) => {
@@ -261,7 +270,7 @@ function DataPage({ role }: { role: string }) {
   const loadTables = useCallback(async () => { try { const body = await jsonFetch<any>(`/api/data/tables?role=${encodeURIComponent(role)}`); setTables(body.tables || []); if (!selected && body.tables?.length) setSelected(body.tables[0].name); } catch (reason) { setError(reason instanceof Error ? reason.message : "表目录加载失败"); } }, [role, selected]);
   const loadData = useCallback(async () => { if (!selected) return; setLoading(true); try { const body = await jsonFetch<any>(`/api/data/table/${encodeURIComponent(selected)}?role=${encodeURIComponent(role)}&page=${page}&page_size=50&search=${encodeURIComponent(search)}`); setData(body); setError(""); } catch (reason) { setError(reason instanceof Error ? reason.message : "数据加载失败"); } finally { setLoading(false); } }, [role, selected, page, search]);
   useEffect(() => { void loadTables(); }, [loadTables]); useEffect(() => { void loadData(); }, [loadData]);
-  const exportCsv = async () => { if (!selected) return; const response = await fetch(`/api/data/table/${encodeURIComponent(selected)}/csv?role=${encodeURIComponent(role)}&page=${page}&page_size=50`); if (!response.ok) return; const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `${selected}.csv`; link.click(); URL.revokeObjectURL(url); };
+  const exportCsv = async () => { if (!selected) return; const response = await fetch(apiUrl(`/api/data/table/${encodeURIComponent(selected)}/csv?role=${encodeURIComponent(role)}&page=${page}&page_size=50`)); if (!response.ok) return; const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `${selected}.csv`; link.click(); URL.revokeObjectURL(url); };
   return <div className="data-layout"><aside className="data-sidebar"><div className="sidebar-heading"><span>数据表</span><button className="icon-button" onClick={() => void loadTables()} title="刷新表目录"><ReloadOutlined /></button></div>{tables.map((table) => <button key={table.name} className={selected === table.name ? "table-link selected" : "table-link"} onClick={() => { setSelected(table.name); setPage(1); }}>{table.name}<span>{table.row_count ?? "-"}</span></button>)}</aside><section className="data-content"><div className="workspace-heading"><div><span className="section-kicker">数据浏览</span><h1>{selected || "选择一张表"}</h1></div><div className="toolbar"><div className="search-input"><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索整张表" /><CloseOutlined onClick={() => setSearch("")} /></div><button className="secondary-button" onClick={() => void exportCsv()} disabled={!selected}><DownloadOutlined />导出 CSV</button></div></div>{error && <div className="error-box">{error}</div>}{data && <><div className="data-summary">第 {data.page} / {data.total_pages || 1} 页 · 共 {data.total_rows} 行{loading && " · 加载中"}</div><div className="table-wrap large-table"><table><thead><tr>{(data.columns || []).map((column: string) => <th key={column}>{column}</th>)}</tr></thead><tbody>{(data.rows || []).map((row: any[], rowIndex: number) => <tr key={rowIndex}>{row.map((value, cellIndex) => <td key={cellIndex}>{String(value ?? "")}</td>)}</tr>)}</tbody></table>{!data.rows?.length && <div className="empty-result">没有匹配数据。</div>}</div><div className="pagination"><button className="icon-button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} title="上一页"><LeftOutlined /></button><span>{page}</span><button className="icon-button" disabled={page >= (data.total_pages || 1)} onClick={() => setPage((value) => value + 1)} title="下一页"><RightOutlined /></button></div></>}</section></div>;
 }
 
@@ -277,7 +286,7 @@ function App() {
   useEffect(() => { if (!sessions.find((session) => session.id === activeId)) setActiveId(sessions[0]?.id || ""); saveSessions(sessions); }, [sessions, activeId]);
   useEffect(() => { if (activeId) localStorage.setItem(SESSION_KEY, activeId); }, [activeId]); useEffect(() => { localStorage.setItem(ROLE_KEY, role); }, [role]); useEffect(() => { localStorage.setItem(PROVIDER_KEY, provider); }, [provider]);
   const updateSessions = (next: Session[]) => { setSessions(next); if (!next.find((session) => session.id === activeId)) setActiveId(next[0]?.id || ""); };
-  return <BrowserRouter><Shell role={role} provider={provider} roles={roles} providers={providers} onRole={setRole} onProvider={setProvider}><Routes><Route path="/" element={<QueryPage role={role} provider={provider} sessions={sessions} activeId={activeId || sessions[0]?.id || ""} onSessions={updateSessions} onSelectSession={setActiveId} />} /><Route path="/data" element={<DataPage role={role} />} /><Route path="/console" element={<ConsolePage provider={provider} />} /></Routes></Shell></BrowserRouter>;
+  return <HashRouter><Shell role={role} provider={provider} roles={roles} providers={providers} onRole={setRole} onProvider={setProvider}><Routes><Route path="/" element={<QueryPage role={role} provider={provider} sessions={sessions} activeId={activeId || sessions[0]?.id || ""} onSessions={updateSessions} onSelectSession={setActiveId} />} /><Route path="/data" element={<DataPage role={role} />} /><Route path="/console" element={<ConsolePage provider={provider} />} /></Routes></Shell></HashRouter>;
 }
 
 export { App };

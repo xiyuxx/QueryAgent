@@ -114,7 +114,11 @@ def create_app(*, services: AppServices | None = None) -> FastAPI:
     application.state.services = runtime
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "https://cohub.live",
+        ],
         allow_credentials=False,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
